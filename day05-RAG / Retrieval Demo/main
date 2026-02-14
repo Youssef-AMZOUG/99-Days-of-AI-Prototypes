@@ -1,0 +1,189 @@
+# =========================================================
+# Day 05: RAG / Retrieval Demo with Multiple File Upload
+# =========================================================
+
+!pip install -q openai faiss-cpu sentence-transformers gradio tenacity PyPDF2
+
+import os
+import shelve
+import numpy as np
+from getpass import getpass
+from openai import OpenAI
+import faiss
+import gradio as gr
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from PyPDF2 import PdfReader
+
+# ----------------------
+# Local fallback model
+# ----------------------
+try:
+    from sentence_transformers import SentenceTransformer
+    LOCAL_EMB_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+except Exception:
+    LOCAL_EMB_MODEL = None
+
+# ----------------------
+# OpenAI API Key
+# ----------------------
+if not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = getpass("Enter your OpenAI API key (hidden): ")
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# ----------------------
+# Embedding cache helpers
+# ----------------------
+CACHE_PATH = "embeddings_cache.db"
+
+def load_from_cache(key):
+    with shelve.open(CACHE_PATH) as db:
+        return db.get(key)
+
+def save_to_cache(key, value):
+    with shelve.open(CACHE_PATH) as db:
+        db[key] = value
+
+# ----------------------
+# OpenAI embedding with retry
+# ----------------------
+@retry(
+    reraise=True,
+    wait=wait_exponential(multiplier=1, min=1, max=20),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type(Exception)
+)
+def _openai_embed_batch(text_list, model="text-embedding-3-small"):
+    resp = client.embeddings.create(model=model, input=text_list)
+    return [np.array(item.embedding, dtype=np.float32) for item in resp.data]
+
+def _is_rate_limit_or_quota_error(exc):
+    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
+    text = str(exc).lower()
+    return status == 429 or "ratelimit" in text or "quota" in text or "insufficient_quota" in text or "429" in text
+
+# ----------------------
+# Compute embeddings (OpenAI or fallback)
+# ----------------------
+def get_embeddings_for_corpus(documents, batch_size=16, openai_model="text-embedding-3-small"):
+    results, docs_to_fetch, indices_to_fetch = [], [], []
+
+    for i, doc in enumerate(documents):
+        key = "md5_" + str(abs(hash(doc)))
+        cached = load_from_cache(key)
+        if cached is not None:
+            results.append(np.array(cached, dtype=np.float32))
+        else:
+            results.append(None)
+            docs_to_fetch.append(doc)
+            indices_to_fetch.append(i)
+
+    if docs_to_fetch:
+        fetched_embeddings = []
+        try:
+            for i in range(0, len(docs_to_fetch), batch_size):
+                batch = docs_to_fetch[i:i+batch_size]
+                emb_batch = _openai_embed_batch(batch, model=openai_model)
+                fetched_embeddings.extend(emb_batch)
+                for doc_txt, emb in zip(batch, emb_batch):
+                    save_to_cache("md5_" + str(abs(hash(doc_txt))), emb.tolist())
+        except Exception as e:
+            if _is_rate_limit_or_quota_error(e):
+                print("OpenAI quota/rate-limit reached. Using local model fallback.")
+                if LOCAL_EMB_MODEL is None:
+                    raise RuntimeError("No local fallback available.") from e
+                fetched_embeddings = [LOCAL_EMB_MODEL.encode(d, convert_to_numpy=True).astype(np.float32) for d in docs_to_fetch]
+                for doc_txt, emb in zip(docs_to_fetch, fetched_embeddings):
+                    save_to_cache("md5_" + str(abs(hash(doc_txt))), emb.tolist())
+            else:
+                raise
+        for idx, emb in zip(indices_to_fetch, fetched_embeddings):
+            results[idx] = np.array(emb, dtype=np.float32)
+
+    return np.vstack(results)
+
+# ----------------------
+# Extract text from uploaded file
+# ----------------------
+def extract_text_from_file(file_path):
+    ext = file_path.split(".")[-1].lower()
+    text = ""
+    if ext == "pdf":
+        reader = PdfReader(file_path)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    else:
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    return text.strip()
+
+# ----------------------
+# Main RAG function
+# ----------------------
+def rag_with_upload(files, query, top_k=2):
+    if not files:
+        return "Please upload at least one document."
+
+    # Extract text from uploaded files
+    corpus = [extract_text_from_file(f) for f in files]
+
+    # Compute embeddings and build FAISS index
+    embs = get_embeddings_for_corpus(corpus, batch_size=4)
+    dim = embs.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embs)
+
+    # Query embedding and retrieval
+    q_emb = get_embeddings_for_corpus([query], batch_size=1)[0].reshape(1, -1)
+    dists, idxs = index.search(q_emb, top_k)
+    retrieved_docs = [corpus[i] for i in idxs[0]]
+
+    # Combine context
+    context = "\n\n---\n\n".join(retrieved_docs)
+    prompt = f"Answer the question using ONLY the context below:\n\n{context}\n\nQuestion: {query}\nAnswer:"
+
+    # Call LLM if API key is available
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=300
+            )
+            answer = resp.choices[0].message.content
+        except Exception as e:
+            answer = context
+    else:
+        answer = context  # fallback
+
+    # Return answer + top-k documents
+    display_text = f"**Answer:**\n{answer}\n\n**Retrieved Snippets:**\n"
+    for i, doc in enumerate(retrieved_docs):
+        display_text += f"\n[{i+1}]\n{doc[:500]}{'...' if len(doc) > 500 else ''}\n"
+    return display_text
+
+# ----------------------
+# Gradio interface
+# ----------------------
+iface = gr.Interface(
+    fn=rag_with_upload,
+    inputs=[
+        gr.File(
+            file_types=[".txt", ".pdf"],  # only TXT/PDF
+            file_count="multiple",         # allow multiple uploads
+            type="filepath",               # return file paths
+            label="Upload Documents"
+        ),
+        gr.Textbox(
+            lines=2,
+            placeholder="Enter your question here...",
+            label="Question"
+        )
+    ],
+    outputs="text",
+    title="Day 05: RAG / Retrieval Demo with Document Upload",
+    description="Upload your own documents and ask questions. Uses OpenAI embeddings if available, else local model fallback. Shows top-k retrieved snippets."
+)
+
+iface.launch()

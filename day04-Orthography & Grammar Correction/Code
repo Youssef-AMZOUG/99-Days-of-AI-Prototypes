@@ -1,0 +1,103 @@
+# ================================================
+# Day 04: Orthography & Grammar Correction
+# ================================================
+
+# 1️⃣ Install dependencies (run once)
+!pip install -q pyspellchecker textblob
+!python -m textblob.download_corpora
+
+# 2️⃣ Imports
+import re
+from spellchecker import SpellChecker
+from textblob import TextBlob
+
+# 3️⃣ Setup spellchecker
+spell = SpellChecker(language="en")
+TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)  # split words & punctuation
+
+
+# 4️⃣ Utility functions
+def preserve_case(original: str, corrected: str) -> str:
+    """Preserve capitalization pattern"""
+    if original.isupper():
+        return corrected.upper()
+    if original[0].isupper():
+        return corrected.capitalize()
+    return corrected
+
+
+def simple_word_correction(token: str):
+    """Correct a single token, return (corrected_token, changed_flag)"""
+    if not token.isalpha():
+        return token, False
+    if token.lower() in spell:
+        return token, False
+    correction = spell.correction(token.lower())
+    if correction is None:
+        return token, False
+    corrected = preserve_case(token, correction)
+    return corrected, corrected != token
+
+
+def context_correction_sentence(sentence: str):
+    """Optional context-aware post-pass using TextBlob"""
+    try:
+        tb = TextBlob(sentence)
+        return str(tb.correct())
+    except Exception:
+        return sentence
+
+
+def correct_text(text: str, use_context=False):
+    """Correct input text; returns original, corrected, edits"""
+    tokens = TOKEN_RE.findall(text)
+    corrected_tokens = []
+    edits = []
+
+    for i, tok in enumerate(tokens):
+        corrected_tok, changed = simple_word_correction(tok)
+        corrected_tokens.append(corrected_tok)
+        if changed:
+            edits.append((i, tok, corrected_tok))
+
+    # Reconstruct sentence (naive)
+    reconstructed = ""
+    for t in corrected_tokens:
+        if reconstructed and re.match(r"\w", t):
+            reconstructed += " "
+        reconstructed += t
+
+    if use_context:
+        reconstructed = context_correction_sentence(reconstructed)
+
+    return {
+        "original": text,
+        "corrected": reconstructed,
+        "edits": edits,
+    }
+
+
+def pretty_print(result):
+    print("Original:  ", result["original"])
+    print("Corrected: ", result["corrected"])
+    if result["edits"]:
+        print("\nEdits (index, original -> corrected):")
+        for idx, orig, corr in result["edits"]:
+            print(f"  {idx:>3} : {orig} -> {corr}")
+    else:
+        print("\nNo token-level edits.")
+
+
+# 5️⃣ Demo examples
+examples = [
+    "Ths is an exampel of bad speling.",
+    "I cant beleive its not butter.",
+    "Their going to the park tomorow.",
+    "This sentense has mispelled and grammaticla errors."
+]
+
+print("==== Day 04: Orthography Correction ====\n")
+for text in examples:
+    res = correct_text(text, use_context=True)
+    pretty_print(res)
+    print("-"*50)
