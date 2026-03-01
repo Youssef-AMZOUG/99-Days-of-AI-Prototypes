@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Day 15 — Community Prompt Lab</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>🧪 Day 15 — Community Prompt Lab</h1>
+      <p>Submit a prompt challenge, share your AI result, remix others, and vote on what inspired you.</p>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>Share a Prompt Challenge</h2>
+        <form id="prompt-form">
+          <label>
+            Title
+            <input id="title" name="title" required maxlength="80" placeholder="e.g., Explain gravity to a 6-year-old with a rap" />
+          </label>
+
+          <label>
+            Prompt
+            <textarea id="prompt" name="prompt" rows="4" required placeholder="Write the exact prompt you used..."></textarea>
+          </label>
+
+          <label>
+            Model
+            <input id="model" name="model" required maxlength="60" placeholder="e.g., GPT-4.1 / Claude / SDXL" />
+          </label>
+
+          <label>
+            Result Type
+            <select id="type" name="type" required>
+              <option value="text">Text</option>
+              <option value="image">Image</option>
+              <option value="code">Code</option>
+              <option value="audio">Audio</option>
+            </select>
+          </label>
+
+          <label>
+            Theme
+            <select id="theme" name="theme" required>
+              <option value="open">Open</option>
+              <option value="education">Education</option>
+              <option value="climate">Climate</option>
+              <option value="accessibility">Accessibility</option>
+              <option value="productivity">Productivity</option>
+            </select>
+          </label>
+
+          <label>
+            Result / Notes
+            <textarea id="result" name="result" rows="3" required placeholder="Paste output summary, key insight, or link..."></textarea>
+          </label>
+
+          <button type="submit">Publish challenge</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="list-header">
+          <h2>Community Gallery</h2>
+          <button id="clear-all" class="danger">Clear all (local)</button>
+        </div>
+        <label>
+          Filter by theme
+          <select id="theme-filter">
+            <option value="all">All themes</option>
+            <option value="open">Open</option>
+            <option value="education">Education</option>
+            <option value="climate">Climate</option>
+            <option value="accessibility">Accessibility</option>
+            <option value="productivity">Productivity</option>
+          </select>
+        </label>
+        <p class="hint">Votes reward creativity, usefulness, and reproducibility.</p>
+
+        <h3>🏆 Leaderboard</h3>
+        <div id="leaderboard" class="leaderboard"></div>
+
+        <div id="cards" class="cards"></div>
+      </section>
+    </main>
+
+    <template id="card-template">
+      <article class="card">
+        <div class="card-top">
+          <h3 class="card-title"></h3>
+          <span class="chip card-type"></span>
+        </div>
+        <p class="meta"></p>
+        <p class="block"><strong>Prompt:</strong> <span class="card-prompt"></span></p>
+        <p class="block"><strong>Result:</strong> <span class="card-result"></span></p>
+
+        <div class="actions">
+          <button data-vote="creative">🎨 Creative <span class="count"></span></button>
+          <button data-vote="useful">🧠 Useful <span class="count"></span></button>
+          <button data-vote="repro">🔁 Reproducible <span class="count"></span></button>
+          <button data-action="remix">⚡ Remix</button>
+          <button data-action="delete" class="danger">🗑 Delete</button>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
